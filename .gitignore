@@ -1,0 +1,24 @@
+# База данных
+bot.db
+*.db
+
+# Виртуальное окружение
+venv/
+env/
+.venv/
+
+# Кэш Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+
+# Среда
+.env
+.vscode/
+.idea/
+
+# Amvera
+.amvera/
