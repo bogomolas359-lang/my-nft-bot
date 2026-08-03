@@ -40,6 +40,31 @@ class AdminAdd(StatesGroup):
 # ================= ВСПОМОГАТЕЛЬНЫЕ =================
 
 async def send_main_menu(message_or_call, user_id: int, edit: bool = False):
+    """Отправка главного меню пользователю с обработкой ошибок."""
+    user = await db.get_user(user_id)
+    lang = user["language"]
+    is_admin = bool(user["is_admin"])
+    text = t(lang, "welcome")
+    kb = main_menu_kb(lang, is_admin)
+    
+    try:
+        if edit and hasattr(message_or_call, "edit_text"):
+            await message_or_call.edit_text(text, reply_markup=kb)
+        elif hasattr(message_or_call, "message"):
+            # Это CallbackQuery
+            await message_or_call.message.answer(text, reply_markup=kb)
+        else:
+            # Это Message
+            await message_or_call.answer(text, reply_markup=kb)
+    except Exception as e:
+        # Если ошибка - пробуем отправить как новое сообщение
+        try:
+            if hasattr(message_or_call, "message"):
+                await message_or_call.message.answer(text, reply_markup=kb)
+            else:
+                await message_or_call.answer(text, reply_markup=kb)
+        except Exception:
+            pass
     """Отправка главного меню пользователю."""
     user = await db.get_user(user_id)
     lang = user["language"]
@@ -590,3 +615,13 @@ async def cancel_handler(call: CallbackQuery, state: FSMContext):
     lang = user["language"]
     await call.message.edit_text(t(lang, "cancelled"), reply_markup=back_kb(lang))
     await call.answer()
+
+@router.message()
+async def unknown_message(message: Message):
+    """Обработчик для неизвестных сообщений."""
+    user = await db.get_user(message.from_user.id)
+    lang = user["language"]
+    await message.answer(
+        t(lang, "welcome"),
+        reply_markup=main_menu_kb(lang, bool(user["is_admin"]))
+    )

@@ -5,6 +5,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.client.session.aiohttp import AiohttpSession
 
 from handlers import router
 from database import init_db
@@ -19,7 +20,8 @@ logging.basicConfig(level=logging.INFO)
 
 async def main():
     await init_db()
-    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    session = AiohttpSession(timeout=120)
+    bot = Bot(token=BOT_TOKEN, session=session, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     
