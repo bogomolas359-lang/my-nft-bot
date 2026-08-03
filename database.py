@@ -69,7 +69,7 @@ async def update_user(user_id, **kwargs):
         await db.commit()
 
 async def create_deal(seller_id, seller_username, gift_link, amount, currency, payment_details):
-    deal_number = f"#{random.randint(100000, 999999)}"
+    deal_number = f"ALX{random.randint(100000, 999999)}"
     now = datetime.now().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""

@@ -89,9 +89,9 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     user = await db.get_user(message.from_user.id)
     lang = user["language"]
 
-    # Deep-link: /start#DEALNUMBER
+    # Deep-link: /start ALX123456
     args = message.text.split(" ", 1)
-    if len(args) > 1 and args[1].startswith("#"):
+    if len(args) > 1 and args[1].startswith("ALX"):
         deal_number = args[1]
         deal = await db.get_deal_by_number(deal_number)
         if deal and deal["status"] == "waiting_for_buyer":
@@ -433,7 +433,7 @@ async def admin_deals_list(call: CallbackQuery):
         deals_text = ""
         for d in deals[:20]:
             deals_text += (
-                f"🆔 Номер: #{d['deal_number']}\n"
+                f"🆔 Номер: {d['deal_number']}\n"
                 f"🎁 {d['gift_link']}\n"
                 f"👤 @{d['seller_username'] or 'unknown'}\n\n"
             )
