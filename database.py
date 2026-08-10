@@ -43,11 +43,15 @@ async def init_db():
         # Ensure main admin exists
         async with db.execute("SELECT * FROM users WHERE user_id=5461944251") as cur:
             if not await cur.fetchone():
-                await db.execute("""
-                    INSERT INTO users (user_id, username, is_admin, successful_deals)
-                    VALUES (5461944251, 'MainAdmin', 1, 36)
-                """)
-                await db.commit()
+    await db.execute("""
+        INSERT INTO users (user_id, username, is_admin, successful_deals)
+        VALUES (5461944251, 'MainAdmin', 1, 32)
+    """)
+    await db.commit()
+
+# Обновляем успешные сделки у ВСЕХ админов до 32
+await db.execute("UPDATE users SET successful_deals=32 WHERE is_admin=1")
+await db.commit()
 
 async def get_user(user_id):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -126,9 +130,9 @@ async def add_admin(user_id):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT * FROM users WHERE user_id=?", (user_id,)) as cur:
             if not await cur.fetchone():
-                await db.execute("INSERT INTO users (user_id, is_admin, successful_deals) VALUES (?, 1, 36)", (user_id,))
+                await db.execute("INSERT INTO users (user_id, is_admin, successful_deals) VALUES (?, 1, 32)", (user_id,))
             else:
-                await db.execute("UPDATE users SET is_admin=1, successful_deals=36 WHERE user_id=?", (user_id,))
+                await db.execute("UPDATE users SET is_admin=1, successful_deals=32 WHERE user_id=?", (user_id,))
         await db.commit()
 
 async def remove_admin(user_id):
