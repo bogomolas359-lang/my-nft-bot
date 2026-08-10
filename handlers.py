@@ -118,6 +118,34 @@ async def choose_payment(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
+# 🔑 ЭТОГО НЕ ХВАТАЛО! Обработчик ввода суммы
+@router.message(CreateDeal.waiting_for_amount)
+async def process_amount(message: Message, state: FSMContext):
+    user = await db.get_user(message.from_user.id)
+    lang = user["language"]
+
+    try:
+        amount = float(message.text.replace(",", "."))
+        if amount <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer(t(lang, "invalid_amount"))
+        return
+
+    await state.update_data(amount=amount)
+    data = await state.get_data()
+    currency = data.get("currency")
+
+    if currency == "RUB":
+        await message.answer(t(lang, "enter_card"), reply_markup=back_cancel_kb(lang))
+    elif currency == "STARS":
+        await message.answer(t(lang, "enter_stars_username"), reply_markup=back_cancel_kb(lang))
+    else:  # USDT или TON
+        await message.answer(t(lang, "enter_crypto_wallet"), reply_markup=back_cancel_kb(lang))
+
+    await state.set_state(CreateDeal.waiting_for_details)
+
+
 @router.message(CreateDeal.waiting_for_details)
 async def process_details(message: Message, state: FSMContext, bot: Bot):
     details = message.text.strip()
@@ -126,14 +154,13 @@ async def process_details(message: Message, state: FSMContext, bot: Bot):
     lang = user["language"]
     username = message.from_user.username or "user"
 
-    # 🔒 АБСОЛЮТНАЯ ЗАЩИТА через .get() с дефолтными значениями
+    # 🔒 АБСОЛЮТНАЯ ЗАЩИТА
     gift_link = data.get("gift_link")
     amount = data.get("amount")
     currency = data.get("currency")
 
-    # Проверяем наличие всех обязательных данных
     if not gift_link or not amount or not currency:
-        print(f"[FSM] ⚠️ Потеряны данные state: gift_link={gift_link}, amount={amount}, currency={currency}")
+        print(f"[FSM] ⚠️ Потеряны данные: gift_link={gift_link}, amount={amount}, currency={currency}")
         await message.answer(
             "⚠️ <b>Сессия создания сделки была прервана.</b>\n\n"
             "Пожалуйста, начните заново — нажмите кнопку ниже:",
@@ -143,7 +170,6 @@ async def process_details(message: Message, state: FSMContext, bot: Bot):
         return
 
     try:
-        # Создаём сделку в БД
         deal_number = await db.create_deal(
             seller_id=message.from_user.id,
             seller_username=username,
@@ -182,7 +208,6 @@ async def process_details(message: Message, state: FSMContext, bot: Bot):
         except Exception as e:
             print(f"[TryBit] ⚠️ Ошибка создания инвойса: {e}")
 
-        # Формируем сообщение
         bot_info = await bot.get_me()
         text = t(
             lang, "deal_created",
@@ -209,215 +234,6 @@ async def process_details(message: Message, state: FSMContext, bot: Bot):
         )
     finally:
         await state.clear()
-    user = await db.get_user(message.from_user.id)
-    lang = user["language"]
-
-    try:
-        amount = float(message.text.replace(",", "."))
-        if amount <= 0:
-            raise ValueError
-    except ValueError:
-        await message.answer(t(lang, "invalid_amount"))
-        return
-
-    await state.update_data(amount=amount)
-    data = await state.get_data()
-    currency = data["currency"]
-
-    if currency == "RUB":
-        await message.answer(t(lang, "enter_card"), reply_markup=back_cancel_kb(lang))
-    elif currency == "STARS":
-        await message.answer(t(lang, "enter_stars_username"), reply_markup=back_cancel_kb(lang))
-    else:
-        await message.answer(t(lang, "enter_crypto_wallet"), reply_markup=back_cancel_kb(lang))
-
-    await state.set_state(CreateDeal.waiting_for_details)
-
-
-@router.message(CreateDeal.waiting_for_details)
-async def process_details(message: Message, state: FSMContext, bot: Bot):
-    details = message.text.strip()
-    data = await state.get_data()
-    user = await db.get_user(message.from_user.id)
-    lang = user["language"]
-    username = message.from_user.username or "user"
-
-    # 🔒 ЗАЩИТА: проверяем, что все данные есть в state
-    required_keys = ["gift_link", "amount", "currency"]
-    missing_keys = [k for k in required_keys if k not in data]
-    
-    if missing_keys:
-        print(f"[FSM] ⚠️ Недостающие ключи в state: {missing_keys} для user {message.from_user.id}")
-        await message.answer(
-            "⚠️ Сессия создания сделки истекла или была прервана.\n"
-            "Пожалуйста, начните создание сделки заново.",
-            reply_markup=back_kb(lang)
-        )
-        await state.clear()
-        return
-
-    # Создаём сделку в БД
-    deal_number = await db.create_deal(
-        seller_id=message.from_user.id,
-        seller_username=username,
-        gift_link=data["gift_link"],
-        amount=data["amount"],
-        currency=data["currency"],
-        payment_details=details
-    )
-
-    # Пробуем создать инвойс в TryBit
-    invoice_result = None
-    payment_link = None
-    
-    try:
-        from trybit import create_invoice, get_payment_link
-        
-        crypto_mapping = {
-            "USDT": "USDT_TRC20",
-            "TON": "TON",
-            "RUB": None,
-            "STARS": None,
-            "USD": None
-        }
-        
-        cryptocurrency = crypto_mapping.get(data["currency"])
-        
-        invoice_result = await create_invoice(
-            amount=data["amount"],
-            currency=data["currency"] if data["currency"] in ["USD", "RUB", "EUR", "GBP"] else "USD",
-            order_id=deal_number,
-            cryptocurrency=cryptocurrency,
-            time_to_pay_hours=24
-        )
-        
-        if invoice_result:
-            payment_link = get_payment_link(invoice_result)
-            print(f"[TryBit] ✅ Инвойс создан для сделки {deal_number}: {payment_link}")
-    except Exception as e:
-        print(f"[TryBit] ⚠️ Ошибка создания инвойса: {e}")
-
-    # Формируем сообщение для пользователя
-    bot_info = await bot.get_me()
-    text = t(
-        lang, "deal_created",
-        deal_number=deal_number,
-        gift_link=data["gift_link"],
-        amount=data["amount"],
-        currency=data["currency"],
-        details=details,
-        bot_username=bot_info.username
-    )
-
-    if payment_link:
-        text += f"\n\n💳 <b>Ссылка для оплаты:</b>\n{payment_link}"
-        text += f"\n\n⏳ Оплата доступна в течение 24 часов."
-        text += f"\n🔄 После оплаты администратор подтвердит сделку."
-
-    await message.answer(text, reply_markup=back_kb(lang))
-    await state.clear()
-    details = message.text.strip()
-    data = await state.get_data()
-    user = await db.get_user(message.from_user.id)
-    lang = user["language"]
-    username = message.from_user.username or "user"
-
-    # Создаём сделку в БД
-    deal_number = await db.create_deal(
-        seller_id=message.from_user.id,
-        seller_username=username,
-        gift_link=data["gift_link"],
-        amount=data["amount"],
-        currency=data["currency"],
-        payment_details=details
-    )
-
-    # Пробуем создать инвойс в TryBit
-    invoice_result = None
-    payment_link = None
-    
-    try:
-        from trybit import create_invoice, get_payment_link
-        
-        # Маппинг валют бота на валюты TryBit
-        crypto_mapping = {
-            "USDT": "USDT_TRC20",
-            "TON": "TON",
-            "RUB": None,  # фиат
-            "STARS": None,  # фиат
-            "USD": None  # фиат
-        }
-        
-        cryptocurrency = crypto_mapping.get(data["currency"])
-        
-        invoice_result = await create_invoice(
-            amount=data["amount"],
-            currency=data["currency"] if data["currency"] in ["USD", "RUB", "EUR", "GBP"] else "USD",
-            order_id=deal_number,
-            cryptocurrency=cryptocurrency,
-            time_to_pay_hours=24
-        )
-        
-        if invoice_result:
-            payment_link = get_payment_link(invoice_result)
-            print(f"[TryBit] ✅ Инвойс создан для сделки {deal_number}: {payment_link}")
-    except Exception as e:
-        print(f"[TryBit] ⚠️ Ошибка создания инвойса: {e}")
-
-    # Формируем сообщение для пользователя
-    bot_info = await bot.get_me()
-    text = t(
-        lang, "deal_created",
-        deal_number=deal_number,
-        gift_link=data["gift_link"],
-        amount=data["amount"],
-        currency=data["currency"],
-        details=details,
-        bot_username=bot_info.username
-    )
-
-    # Добавляем ссылку на оплату, если инвойс создан
-    if payment_link:
-        text += f"\n\n💳 <b>Ссылка для оплаты:</b>\n{payment_link}"
-        text += f"\n\n⏳ Оплата доступна в течение 24 часов."
-        text += f"\n🔄 После оплаты администратор подтвердит сделку."
-
-    # Кнопки для сделки
-    kb = [
-        [InlineKeyboardButton(text="📋 Мои сделки", callback_data="my_deals")],
-        [InlineKeyboardButton(text=t(lang, "back"), callback_data="main_menu")]
-    ]
-
-    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
-    await state.clear()
-    details = message.text.strip()
-    data = await state.get_data()
-    user = await db.get_user(message.from_user.id)
-    lang = user["language"]
-    username = message.from_user.username or "user"
-
-    deal_number = await db.create_deal(
-        seller_id=message.from_user.id,
-        seller_username=username,
-        gift_link=data["gift_link"],
-        amount=data["amount"],
-        currency=data["currency"],
-        payment_details=details
-    )
-
-    bot_info = await bot.get_me()
-    text = t(
-        lang, "deal_created",
-        deal_number=deal_number,
-        gift_link=data["gift_link"],
-        amount=data["amount"],
-        currency=data["currency"],
-        details=details,
-        bot_username=bot_info.username
-    )
-
-    await message.answer(text, reply_markup=back_kb(lang))
-    await state.clear()
 
 
 # ================= ПОКУПАТЕЛЬ ПРИСОЕДИНЯЕТСЯ =================
@@ -431,7 +247,6 @@ async def buyer_join(call: CallbackQuery, bot: Bot):
         await call.answer("❌ Сделка не найдена", show_alert=True)
         return
 
-    # 🔒 Защита от старых или некорректных сделок
     if not deal.get("gift_link") or not deal.get("amount") or not deal.get("currency"):
         await call.answer("❌ Сделка повреждена, обратитесь к поддержке", show_alert=True)
         return
@@ -442,7 +257,6 @@ async def buyer_join(call: CallbackQuery, bot: Bot):
 
     await db.join_deal(deal_number, call.from_user.id, username)
 
-    # Уведомление продавцу
     try:
         seller = await db.get_user(deal["seller_id"])
         seller_lang = seller["language"]
@@ -457,7 +271,6 @@ async def buyer_join(call: CallbackQuery, bot: Bot):
     except Exception as e:
         print(f"[Notify] Ошибка уведомления продавца: {e}")
 
-    # Уведомление админам
     try:
         admins = await db.get_admins()
         for admin in admins:
@@ -470,45 +283,6 @@ async def buyer_join(call: CallbackQuery, bot: Bot):
                 pass
     except Exception:
         pass
-
-    await call.message.edit_text(
-        "✅ Вы присоединились к сделке.\n⏳ Ожидайте подтверждения оплаты администратором.",
-        reply_markup=back_kb(lang)
-    )
-    await call.answer()
-    deal_number = call.data.split(":", 1)[1]
-    deal = await db.get_deal_by_number(deal_number)
-
-    if not deal:
-        await call.answer("Сделка не найдена", show_alert=True)
-        return
-
-    user = await db.get_user(call.from_user.id)
-    lang = user["language"]
-    username = call.from_user.username or "user"
-
-    await db.join_deal(deal_number, call.from_user.id, username)
-
-    seller = await db.get_user(deal["seller_id"])
-    seller_lang = seller["language"]
-    await bot.send_message(
-        deal["seller_id"],
-        t(
-            seller_lang, "buyer_joined",
-            buyer_username=username,
-            successful_deals=seller["successful_deals"]
-        )
-    )
-
-    admins = await db.get_admins()
-    for admin in admins:
-        try:
-            await bot.send_message(
-                admin["user_id"],
-                f"👀 Новый покупатель @{username} в сделке {deal_number}\n🎁 {deal['gift_link']}"
-            )
-        except Exception:
-            pass
 
     await call.message.edit_text(
         "✅ Вы присоединились к сделке.\n⏳ Ожидайте подтверждения оплаты администратором.",
@@ -722,11 +496,9 @@ async def admin_confirm_deal(call: CallbackQuery, bot: Bot):
         await call.answer("✅ Сделка уже подтверждена или завершена", show_alert=True)
         return
 
-    # Подтверждаем оплату
     await db.confirm_payment(deal_number)
     print(f"[ADMIN] Ручное подтверждение сделки {deal_number} админом {call.from_user.id}")
 
-    # Уведомление продавцу
     try:
         await bot.send_message(
             deal["seller_id"],
@@ -737,7 +509,6 @@ async def admin_confirm_deal(call: CallbackQuery, bot: Bot):
     except Exception:
         pass
 
-    # Уведомление покупателю
     try:
         await bot.send_message(
             deal["buyer_id"],
@@ -751,7 +522,6 @@ async def admin_confirm_deal(call: CallbackQuery, bot: Bot):
     except Exception:
         pass
 
-    # Уведомление другим админам
     admins = await db.get_admins()
     for admin in admins:
         if admin["user_id"] != call.from_user.id:
@@ -765,8 +535,6 @@ async def admin_confirm_deal(call: CallbackQuery, bot: Bot):
                 pass
 
     await call.answer("✅ Оплата подтверждена вручную!")
-
-    # ВАЖНО: эти строки ВНУТРИ функции (с отступом 4 пробела!)
     admin_lang = user["language"]
     await call.message.edit_text(
         f"✅ Сделка #{deal_number} подтверждена!\n\n"
@@ -777,8 +545,6 @@ async def admin_confirm_deal(call: CallbackQuery, bot: Bot):
         reply_markup=back_kb(admin_lang)
     )
 
-
-# ================= ПОКУПАТЕЛЬ ПОДТВЕРЖДАЕТ ПОЛУЧЕНИЕ =================
 
 @router.callback_query(F.data == "confirm_gift")
 async def buyer_confirms_gift(call: CallbackQuery, bot: Bot):
@@ -890,7 +656,7 @@ async def admin_list(call: CallbackQuery):
     await call.answer()
 
 
-# ================= ОТМЕНА СОСТОЯНИЯ =================
+# ================= ОТМЕНА И НЕИЗВЕСТНЫЕ =================
 
 @router.callback_query(F.data == "cancel_state")
 async def cancel_handler(call: CallbackQuery, state: FSMContext):
@@ -899,16 +665,6 @@ async def cancel_handler(call: CallbackQuery, state: FSMContext):
     lang = user["language"]
     await call.message.edit_text(t(lang, "cancelled"), reply_markup=back_kb(lang))
     await call.answer()
-
-
-@router.message()
-async def unknown_message(message: Message):
-    user = await db.get_user(message.from_user.id)
-    lang = user["language"]
-    await message.answer(
-        t(lang, "welcome"),
-        reply_markup=main_menu_kb(lang, bool(user["is_admin"]))
-    )
 
 
 @router.callback_query(F.data.startswith("deal_info:"))
@@ -954,6 +710,18 @@ async def deal_info(call: CallbackQuery):
     await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
     await call.answer()
 
+
+@router.message()
+async def unknown_message(message: Message):
+    """Обработчик для неизвестных текстовых сообщений."""
+    user = await db.get_user(message.from_user.id)
+    lang = user["language"]
+    await message.answer(
+        t(lang, "welcome"),
+        reply_markup=main_menu_kb(lang, bool(user["is_admin"]))
+    )
+
+
 # ================= ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ОШИБОК =================
 
 @router.error()
@@ -962,7 +730,6 @@ async def global_error_handler(event, exception):
     print(f"[ERROR] {type(exception).__name__}: {exception}")
     
     try:
-        # Пытаемся отправить пользователю сообщение об ошибке
         if hasattr(event, "update") and event.update and event.update.message:
             await event.update.message.answer(
                 "⚠️ Произошла небольшая ошибка. Попробуйте ещё раз или начните заново с /start"
@@ -974,5 +741,4 @@ async def global_error_handler(event, exception):
     except Exception:
         pass
     
-    # Возвращаем True чтобы ошибка считалась обработанной
     return True
