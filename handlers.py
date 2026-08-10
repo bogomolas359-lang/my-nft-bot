@@ -40,32 +40,7 @@ class AdminAdd(StatesGroup):
 # ================= ВСПОМОГАТЕЛЬНЫЕ =================
 
 async def send_main_menu(message_or_call, user_id: int, edit: bool = False):
-    """Отправка главного меню пользователю с обработкой ошибок."""
-    user = await db.get_user(user_id)
-    lang = user["language"]
-    is_admin = bool(user["is_admin"])
-    text = t(lang, "welcome")
-    kb = main_menu_kb(lang, is_admin)
-    
-    try:
-        if edit and hasattr(message_or_call, "edit_text"):
-            await message_or_call.edit_text(text, reply_markup=kb)
-        elif hasattr(message_or_call, "message"):
-            # Это CallbackQuery
-            await message_or_call.message.answer(text, reply_markup=kb)
-        else:
-            # Это Message
-            await message_or_call.answer(text, reply_markup=kb)
-    except Exception as e:
-        # Если ошибка - пробуем отправить как новое сообщение
-        try:
-            if hasattr(message_or_call, "message"):
-                await message_or_call.message.answer(text, reply_markup=kb)
-            else:
-                await message_or_call.answer(text, reply_markup=kb)
-        except Exception:
-            pass
-    """Отправка главного меню пользователю."""
+    """Отправка главного меню пользователю БЕЗ повторных попыток."""
     user = await db.get_user(user_id)
     lang = user["language"]
     is_admin = bool(user["is_admin"])
@@ -73,13 +48,14 @@ async def send_main_menu(message_or_call, user_id: int, edit: bool = False):
     kb = main_menu_kb(lang, is_admin)
     
     if edit and hasattr(message_or_call, "edit_text"):
-        try:
-            await message_or_call.edit_text(text, reply_markup=kb)
-        except Exception:
-            await message_or_call.message.answer(text, reply_markup=kb)
+        # Это CallbackQuery - редактируем текущее сообщение
+        await message_or_call.edit_text(text, reply_markup=kb)
+    elif hasattr(message_or_call, "message"):
+        # Это CallbackQuery - отправляем новое сообщение
+        await message_or_call.message.answer(text, reply_markup=kb)
     else:
+        # Это обычное Message
         await message_or_call.answer(text, reply_markup=kb)
-
 
 # ================= СТАРТ =================
 
@@ -90,7 +66,7 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     lang = user["language"]
 
     # Deep-link: /start ALX123456
-    args = message.text.split(" ", 1)
+    args = message.text.split(" ", 1) if message.text else []
     if len(args) > 1 and args[1].startswith("ALX"):
         deal_number = args[1]
         deal = await db.get_deal_by_number(deal_number)
@@ -105,14 +81,8 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
             await message.answer(text, reply_markup=join_deal_kb(deal_number, lang))
             return
 
+    # Обычный /start - показываем меню один раз
     await send_main_menu(message, message.from_user.id)
-
-
-@router.callback_query(F.data == "main_menu")
-async def to_main_menu(call: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await send_main_menu(call.message, call.from_user.id, edit=True)
-    await call.answer()
 
 
 # ================= СОЗДАНИЕ СДЕЛКИ =================
