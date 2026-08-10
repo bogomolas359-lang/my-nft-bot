@@ -153,6 +153,80 @@ async def process_details(message: Message, state: FSMContext, bot: Bot):
     lang = user["language"]
     username = message.from_user.username or "user"
 
+    # Создаём сделку в БД
+    deal_number = await db.create_deal(
+        seller_id=message.from_user.id,
+        seller_username=username,
+        gift_link=data["gift_link"],
+        amount=data["amount"],
+        currency=data["currency"],
+        payment_details=details
+    )
+
+    # Пробуем создать инвойс в TryBit
+    invoice_result = None
+    payment_link = None
+    
+    try:
+        from trybit import create_invoice, get_payment_link
+        
+        # Маппинг валют бота на валюты TryBit
+        crypto_mapping = {
+            "USDT": "USDT_TRC20",
+            "TON": "TON",
+            "RUB": None,  # фиат
+            "STARS": None,  # фиат
+            "USD": None  # фиат
+        }
+        
+        cryptocurrency = crypto_mapping.get(data["currency"])
+        
+        invoice_result = await create_invoice(
+            amount=data["amount"],
+            currency=data["currency"] if data["currency"] in ["USD", "RUB", "EUR", "GBP"] else "USD",
+            order_id=deal_number,
+            cryptocurrency=cryptocurrency,
+            time_to_pay_hours=24
+        )
+        
+        if invoice_result:
+            payment_link = get_payment_link(invoice_result)
+            print(f"[TryBit] ✅ Инвойс создан для сделки {deal_number}: {payment_link}")
+    except Exception as e:
+        print(f"[TryBit] ⚠️ Ошибка создания инвойса: {e}")
+
+    # Формируем сообщение для пользователя
+    bot_info = await bot.get_me()
+    text = t(
+        lang, "deal_created",
+        deal_number=deal_number,
+        gift_link=data["gift_link"],
+        amount=data["amount"],
+        currency=data["currency"],
+        details=details,
+        bot_username=bot_info.username
+    )
+
+    # Добавляем ссылку на оплату, если инвойс создан
+    if payment_link:
+        text += f"\n\n💳 <b>Ссылка для оплаты:</b>\n{payment_link}"
+        text += f"\n\n⏳ Оплата доступна в течение 24 часов."
+        text += f"\n🔄 После оплаты администратор подтвердит сделку."
+
+    # Кнопки для сделки
+    kb = [
+        [InlineKeyboardButton(text="📋 Мои сделки", callback_data="my_deals")],
+        [InlineKeyboardButton(text=t(lang, "back"), callback_data="main_menu")]
+    ]
+
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+    await state.clear()
+    details = message.text.strip()
+    data = await state.get_data()
+    user = await db.get_user(message.from_user.id)
+    lang = user["language"]
+    username = message.from_user.username or "user"
+
     deal_number = await db.create_deal(
         seller_id=message.from_user.id,
         seller_username=username,
