@@ -120,8 +120,18 @@ async def choose_payment(call: CallbackQuery, state: FSMContext):
 
 @router.message(CreateDeal.waiting_for_amount)
 async def process_amount(message: Message, state: FSMContext):
+    data = await state.get_data()
     user = await db.get_user(message.from_user.id)
     lang = user["language"]
+    
+    # 🔒 Защита от потери state
+    if "currency" not in data:
+        await message.answer(
+            "⚠️ Сессия истекла. Начните создание сделки заново.",
+            reply_markup=back_kb(lang)
+        )
+        await state.clear()
+        return
 
     try:
         amount = float(message.text.replace(",", "."))
@@ -147,6 +157,86 @@ async def process_amount(message: Message, state: FSMContext):
 
 @router.message(CreateDeal.waiting_for_details)
 async def process_details(message: Message, state: FSMContext, bot: Bot):
+    details = message.text.strip()
+    data = await state.get_data()
+    user = await db.get_user(message.from_user.id)
+    lang = user["language"]
+    username = message.from_user.username or "user"
+
+    # 🔒 ЗАЩИТА: проверяем, что все данные есть в state
+    required_keys = ["gift_link", "amount", "currency"]
+    missing_keys = [k for k in required_keys if k not in data]
+    
+    if missing_keys:
+        print(f"[FSM] ⚠️ Недостающие ключи в state: {missing_keys} для user {message.from_user.id}")
+        await message.answer(
+            "⚠️ Сессия создания сделки истекла или была прервана.\n"
+            "Пожалуйста, начните создание сделки заново.",
+            reply_markup=back_kb(lang)
+        )
+        await state.clear()
+        return
+
+    # Создаём сделку в БД
+    deal_number = await db.create_deal(
+        seller_id=message.from_user.id,
+        seller_username=username,
+        gift_link=data["gift_link"],
+        amount=data["amount"],
+        currency=data["currency"],
+        payment_details=details
+    )
+
+    # Пробуем создать инвойс в TryBit
+    invoice_result = None
+    payment_link = None
+    
+    try:
+        from trybit import create_invoice, get_payment_link
+        
+        crypto_mapping = {
+            "USDT": "USDT_TRC20",
+            "TON": "TON",
+            "RUB": None,
+            "STARS": None,
+            "USD": None
+        }
+        
+        cryptocurrency = crypto_mapping.get(data["currency"])
+        
+        invoice_result = await create_invoice(
+            amount=data["amount"],
+            currency=data["currency"] if data["currency"] in ["USD", "RUB", "EUR", "GBP"] else "USD",
+            order_id=deal_number,
+            cryptocurrency=cryptocurrency,
+            time_to_pay_hours=24
+        )
+        
+        if invoice_result:
+            payment_link = get_payment_link(invoice_result)
+            print(f"[TryBit] ✅ Инвойс создан для сделки {deal_number}: {payment_link}")
+    except Exception as e:
+        print(f"[TryBit] ⚠️ Ошибка создания инвойса: {e}")
+
+    # Формируем сообщение для пользователя
+    bot_info = await bot.get_me()
+    text = t(
+        lang, "deal_created",
+        deal_number=deal_number,
+        gift_link=data["gift_link"],
+        amount=data["amount"],
+        currency=data["currency"],
+        details=details,
+        bot_username=bot_info.username
+    )
+
+    if payment_link:
+        text += f"\n\n💳 <b>Ссылка для оплаты:</b>\n{payment_link}"
+        text += f"\n\n⏳ Оплата доступна в течение 24 часов."
+        text += f"\n🔄 После оплаты администратор подтвердит сделку."
+
+    await message.answer(text, reply_markup=back_kb(lang))
+    await state.clear()
     details = message.text.strip()
     data = await state.get_data()
     user = await db.get_user(message.from_user.id)
