@@ -72,10 +72,22 @@ def admin_main_kb(lang):
 
 def admin_deals_kb(deals, lang):
     kb = []
-    for d in deals[:20]:  # limit
+    for d in deals[:20]:
+        # Информация о сделке (некнопка)
+        status_emoji = "🟡" if d["status"] == "waiting_for_buyer" else "🔵" if d["status"] == "buyer_joined" else "✅"
+        info_text = f"{status_emoji} #{d['deal_number']} | @{d['seller_username'] or '?'} | {d['amount']} {d['currency']}"
+        
         kb.append([InlineKeyboardButton(
-            text=t(lang, "confirm_payment_btn", deal_number=d["deal_number"]),
-            callback_data=f"confirm_deal:{d['deal_number']}"
+            text=info_text,
+            callback_data=f"deal_info:{d['deal_number']}"
         )])
-    kb.append([InlineKeyboardButton(text=t(lang, "back"), callback_data="admin_panel")])
+        
+        # Кнопка подтверждения (только для сделок где есть покупатель и оплата не подтверждена)
+        if d["buyer_id"] and d["status"] != "paid" and d["status"] != "completed":
+            kb.append([InlineKeyboardButton(
+                text=f"💸 Подтвердить оплату #{d['deal_number']}",
+                callback_data=f"confirm_deal:{d['deal_number']}"
+            )])
+    
+    kb.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_panel")])
     return InlineKeyboardMarkup(inline_keyboard=kb)

