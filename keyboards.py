@@ -6,7 +6,7 @@ def main_menu_kb(lang, is_admin=False):
         [InlineKeyboardButton(text=t(lang, "create_deal"), callback_data="create_deal")],
         [InlineKeyboardButton(text=t(lang, "change_lang"), callback_data="change_lang")],
         [InlineKeyboardButton(text=t(lang, "credentials"), callback_data="credentials")],
-        [InlineKeyboardButton(text=t(lang, "support"), url="https://t.me/AlumixHelper")],
+        [InlineKeyboardButton(text=t(lang, "support"), url="https://t.me/AlumixHelp")],
         [InlineKeyboardButton(text=t(lang, "about"), callback_data="about")],
     ]
     if is_admin:
