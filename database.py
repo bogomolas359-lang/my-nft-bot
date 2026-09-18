@@ -1,19 +1,48 @@
 import aiosqlite
 import os
-from datetime import datetime
-import random
 from datetime import datetime, timedelta
+import random
 
-HOLD_DAYS = 3  # Срок холда средств (дни)
-
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-os.makedirs(DATA_DIR, exist_ok=True)
-DB_PATH = os.path.join(DATA_DIR, "bot.db")
+# Путь к базе данных (для Amvera используем папку data, чтобы не терялась при рестарте)
+DB_DIR = os.path.join(os.path.dirname(__file__), "data")
+DB_PATH = os.path.join(DB_DIR, "bot.db")
+HOLD_DAYS = 3
 
 
 async def init_db():
+    os.makedirs(DB_DIR, exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
-                await db.execute("""
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                language TEXT DEFAULT 'ru',
+                card_number TEXT,
+                uah_card_number TEXT,
+                stars_username TEXT,
+                usdt_wallet TEXT,
+                ton_wallet TEXT,
+                successful_deals INTEGER DEFAULT 0,
+                is_admin INTEGER DEFAULT 0
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS deals (
+                deal_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deal_number TEXT UNIQUE,
+                seller_id INTEGER,
+                seller_username TEXT,
+                buyer_id INTEGER,
+                buyer_username TEXT,
+                gift_link TEXT,
+                amount REAL,
+                currency TEXT,
+                payment_details TEXT,
+                status TEXT DEFAULT 'waiting_for_buyer',
+                created_at TEXT
+            )
+        """)
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS balance_transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
@@ -39,6 +68,7 @@ async def init_db():
         """)
         await db.commit()
 
+        # Создаем главного админа
         async with db.execute("SELECT * FROM users WHERE user_id=5461944251") as cur:
             if not await cur.fetchone():
                 await db.execute("""
@@ -47,7 +77,7 @@ async def init_db():
                 """)
                 await db.commit()
 
-        # Обновляем успешные сделки у всех админов до 32
+        # Обновляем успешные сделки у всех админов
         await db.execute("UPDATE users SET successful_deals=32 WHERE is_admin=1")
         await db.commit()
 
@@ -89,14 +119,6 @@ async def get_deal_by_number(deal_number):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM deals WHERE deal_number=?", (deal_number,)) as cur:
-            row = await cur.fetchone()
-            return dict(row) if row else None
-
-
-async def get_deal_by_id(deal_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM deals WHERE rowid=?", (deal_id,)) as cur:
             row = await cur.fetchone()
             return dict(row) if row else None
 
@@ -161,7 +183,9 @@ async def get_admins():
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM users WHERE is_admin=1") as cur:
             return [dict(r) for r in await cur.fetchall()]
-            # ================= ВНУТРЕННИЙ БАЛАНС =================
+
+
+# ================= ВНУТРЕННИЙ БАЛАНС =================
 
 async def add_balance(user_id, amount, currency, deal_number):
     """Зачисляет средства на баланс с холдом 3 дня."""
@@ -169,7 +193,8 @@ async def add_balance(user_id, amount, currency, deal_number):
     available_at = (now + timedelta(days=HOLD_DAYS)).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
-            INSERT INTO balance_transactions (user_id, amount, currency, type, deal_number, created_at, available_at)
+            INSERT INTO balance_transactions
+            (user_id, amount, currency, type, deal_number, created_at, available_at)
             VALUES (?, ?, ?, 'deposit', ?, ?, ?)
         """, (user_id, amount, currency, deal_number, now.isoformat(), available_at))
         await db.commit()
@@ -180,21 +205,29 @@ async def get_balance_info(user_id):
     now = datetime.now().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+
         async with db.execute(
             "SELECT currency, SUM(amount) t FROM balance_transactions WHERE user_id=? AND type='deposit' GROUP BY currency",
-            (user_id,)) as cur:
+            (user_id,)
+        ) as cur:
             deposits = {r["currency"]: r["t"] for r in await cur.fetchall()}
+
         async with db.execute(
             "SELECT currency, SUM(amount) t FROM balance_transactions WHERE user_id=? AND type='deposit' AND available_at<=? GROUP BY currency",
-            (user_id, now)) as cur:
+            (user_id, now)
+        ) as cur:
             matured = {r["currency"]: r["t"] for r in await cur.fetchall()}
+
         async with db.execute(
             "SELECT currency, SUM(amount) t FROM withdrawals WHERE user_id=? AND status IN ('pending','approved') GROUP BY currency",
-            (user_id,)) as cur:
+            (user_id,)
+        ) as cur:
             reserved = {r["currency"]: r["t"] for r in await cur.fetchall()}
+
         async with db.execute(
             "SELECT MIN(available_at) m FROM balance_transactions WHERE user_id=? AND type='deposit' AND available_at>?",
-            (user_id, now)) as cur:
+            (user_id, now)
+        ) as cur:
             row = await cur.fetchone()
             hold_until = row["m"] if row else None
 
@@ -221,7 +254,9 @@ async def create_withdrawal(user_id, username, amount, currency, details):
 async def get_pending_withdrawals():
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM withdrawals WHERE status='pending' ORDER BY id") as cur:
+        async with db.execute(
+            "SELECT * FROM withdrawals WHERE status='pending' ORDER BY id"
+        ) as cur:
             return [dict(r) for r in await cur.fetchall()]
 
 
