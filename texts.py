@@ -5,6 +5,7 @@ TEXTS = {
         "change_lang": "🌐 Сменить язык",
         "credentials": "💳 Реквизиты",
         "support": "🆘 Поддержка",
+        "balance_btn": "💰 Баланс",
         "about": "ℹ️ О сервисе",
         "admin_panel": "⚙️ Админ панель",
         "back": "◀️ Назад",
@@ -47,6 +48,8 @@ TEXTS = {
         "invalid_amount": "❌ Введите корректную сумму (число)",
         "cancel": "❌ Отмена",
         "cancelled": "❌ Действие отменено.",
+        "uah_btn": "🇺🇦 Гривны",
+"enter_uah_card": "🏦 Введите номер украинской карты\n\nНа нее будет отправлена оплата после завершения сделки.\nПример: 5168 XXXX XXXX XXXX",
     },
     "en": {
         "welcome": "🛡 Alumix\n\nℹ️ Safe escrow for Telegram deals.\n\nFeatures:\n• Fraud protection\n• Funds held until deal completion\n• Deal history & statuses\n• Support via @AlumixHelper\n\nChoose an action below.",
@@ -95,7 +98,10 @@ TEXTS = {
         "invalid_link": "❌ Invalid link. Send link in format https://t.me/...",
         "invalid_amount": "❌ Enter valid amount (number)",
         "cancel": "❌ Cancel",
+        "balance_btn": "💰 Balance",
         "cancelled": "❌ Cancelled.",
+        "uah_btn": "🇺🇦 Hryvnia",
+"enter_uah_card": "🏦 Enter Ukrainian card number\n\nPayment will be sent here after the deal.\nExample: 5168 XXXX XXXX XXXX",
     }
 }
 

@@ -4,11 +4,15 @@ from texts import t
 def main_menu_kb(lang, is_admin=False):
     kb = [
         [InlineKeyboardButton(text=t(lang, "create_deal"), callback_data="create_deal")],
+        [InlineKeyboardButton(text=t(lang, "balance_btn"), callback_data="balance")],  # НОВАЯ
         [InlineKeyboardButton(text=t(lang, "change_lang"), callback_data="change_lang")],
         [InlineKeyboardButton(text=t(lang, "credentials"), callback_data="credentials")],
         [InlineKeyboardButton(text=t(lang, "support"), url="https://t.me/AlumixHelper")],
         [InlineKeyboardButton(text=t(lang, "about"), callback_data="about")],
     ]
+    if is_admin:
+        kb.insert(0, [InlineKeyboardButton(text=t(lang, "admin_panel"), callback_data="admin_panel")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
     if is_admin:
         kb.insert(0, [InlineKeyboardButton(text=t(lang, "admin_panel"), callback_data="admin_panel")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
@@ -24,11 +28,12 @@ def back_cancel_kb(lang):
          InlineKeyboardButton(text=t(lang, "back"), callback_data="main_menu")]
     ])
 
-def payment_method_kb(lang):
+def def payment_method_kb(lang):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t(lang, "usdt_btn"), callback_data="pay_usdt")],
         [InlineKeyboardButton(text=t(lang, "ton_btn"), callback_data="pay_ton")],
         [InlineKeyboardButton(text=t(lang, "rub_btn"), callback_data="pay_rub")],
+        [InlineKeyboardButton(text=t(lang, "uah_btn"), callback_data="pay_uah")],  # НОВАЯ КНОПКА
         [InlineKeyboardButton(text=t(lang, "stars_btn"), callback_data="pay_stars")],
         [InlineKeyboardButton(text="❌ " + t(lang, "cancel"), callback_data="main_menu")],
     ])
@@ -63,7 +68,8 @@ def credentials_kb(lang):
 
 def admin_main_kb(lang):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 " + "Сделки" if lang == "ru" else "Deals", callback_data="admin_deals")],
+        [InlineKeyboardButton(text="📋 Сделки" if lang == "ru" else "Deals", callback_data="admin_deals")],
+        [InlineKeyboardButton(text="💸 Заявки на вывод", callback_data="admin_withdrawals")],  # НОВАЯ
         [InlineKeyboardButton(text=t(lang, "admin_add"), callback_data="admin_add")],
         [InlineKeyboardButton(text=t(lang, "admin_remove"), callback_data="admin_remove")],
         [InlineKeyboardButton(text=t(lang, "admin_list"), callback_data="admin_list")],

@@ -138,6 +138,8 @@ async def process_amount(message: Message, state: FSMContext):
 
     if currency == "RUB":
         await message.answer(t(lang, "enter_card"), reply_markup=back_cancel_kb(lang))
+    elif currency == "UAH":
+        await message.answer(t(lang, "enter_uah_card"), reply_markup=back_cancel_kb(lang))
     elif currency == "STARS":
         await message.answer(t(lang, "enter_stars_username"), reply_markup=back_cancel_kb(lang))
     else:  # USDT или TON
@@ -188,19 +190,21 @@ async def process_details(message: Message, state: FSMContext, bot: Bot):
                 "USDT": "USDT_TRC20",
                 "TON": "TON",
                 "RUB": None,
+                "UAH": None,  # НОВАЯ ВАЛЮТА - фиат
                 "STARS": None,
                 "USD": None
-            }
+                }
             
             cryptocurrency = crypto_mapping.get(currency)
-            
             invoice_result = await create_invoice(
                 amount=amount,
-                currency=currency if currency in ["USD", "RUB", "EUR", "GBP"] else "USD",
+                currency=currency if currency in ["USD", "RUB", "EUR", "GBP", "UAH"] else "USD",  # Добавили UAH
                 order_id=deal_number,
                 cryptocurrency=cryptocurrency,
                 time_to_pay_hours=24
-            )
+                )
+            
+            
             
             if invoice_result:
                 payment_link = get_payment_link(invoice_result)
