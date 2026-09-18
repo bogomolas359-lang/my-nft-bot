@@ -28,7 +28,7 @@ def back_cancel_kb(lang):
          InlineKeyboardButton(text=t(lang, "back"), callback_data="main_menu")]
     ])
 
-def def payment_method_kb(lang):
+def payment_method_kb(lang):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t(lang, "usdt_btn"), callback_data="pay_usdt")],
         [InlineKeyboardButton(text=t(lang, "ton_btn"), callback_data="pay_ton")],

@@ -3,7 +3,6 @@ import os
 from datetime import datetime, timedelta
 import random
 
-# Путь к базе данных (для Amvera используем папку data, чтобы не терялась при рестарте)
 DB_DIR = os.path.join(os.path.dirname(__file__), "data")
 DB_PATH = os.path.join(DB_DIR, "bot.db")
 HOLD_DAYS = 3
@@ -68,7 +67,6 @@ async def init_db():
         """)
         await db.commit()
 
-        # Создаем главного админа
         async with db.execute("SELECT * FROM users WHERE user_id=5461944251") as cur:
             if not await cur.fetchone():
                 await db.execute("""
@@ -77,7 +75,6 @@ async def init_db():
                 """)
                 await db.commit()
 
-        # Обновляем успешные сделки у всех админов
         await db.execute("UPDATE users SET successful_deals=32 WHERE is_admin=1")
         await db.commit()
 
@@ -185,10 +182,7 @@ async def get_admins():
             return [dict(r) for r in await cur.fetchall()]
 
 
-# ================= ВНУТРЕННИЙ БАЛАНС =================
-
 async def add_balance(user_id, amount, currency, deal_number):
-    """Зачисляет средства на баланс с холдом 3 дня."""
     now = datetime.now()
     available_at = (now + timedelta(days=HOLD_DAYS)).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -201,36 +195,30 @@ async def add_balance(user_id, amount, currency, deal_number):
 
 
 async def get_balance_info(user_id):
-    """Возвращает (инфо по валютам, дата ближайшей разморозки)."""
     now = datetime.now().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-
         async with db.execute(
             "SELECT currency, SUM(amount) t FROM balance_transactions WHERE user_id=? AND type='deposit' GROUP BY currency",
             (user_id,)
         ) as cur:
             deposits = {r["currency"]: r["t"] for r in await cur.fetchall()}
-
         async with db.execute(
             "SELECT currency, SUM(amount) t FROM balance_transactions WHERE user_id=? AND type='deposit' AND available_at<=? GROUP BY currency",
             (user_id, now)
         ) as cur:
             matured = {r["currency"]: r["t"] for r in await cur.fetchall()}
-
         async with db.execute(
             "SELECT currency, SUM(amount) t FROM withdrawals WHERE user_id=? AND status IN ('pending','approved') GROUP BY currency",
             (user_id,)
         ) as cur:
             reserved = {r["currency"]: r["t"] for r in await cur.fetchall()}
-
         async with db.execute(
             "SELECT MIN(available_at) m FROM balance_transactions WHERE user_id=? AND type='deposit' AND available_at>?",
             (user_id, now)
         ) as cur:
             row = await cur.fetchone()
             hold_until = row["m"] if row else None
-
     info = {}
     for cur_code in deposits:
         res = reserved.get(cur_code, 0)
