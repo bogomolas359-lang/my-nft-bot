@@ -1027,8 +1027,8 @@ async def unknown_message(message: Message):
 # ================= ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ОШИБОК =================
 
 @router.error()
-async def global_error_handler(event: Exception, update: Update = None):
-    """Ловит все необработанные ошибки. event — это исключение, update — апдейт."""
+async def global_error_handler(event, update=None):
+    """Ловит все необработанные ошибки. event - исключение, update - апдейт."""
     print(f"[ERROR] {type(event).__name__}: {event}")
     try:
         if update is not None:
