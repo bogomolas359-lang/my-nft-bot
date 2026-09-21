@@ -28,6 +28,8 @@ class CreateDeal(StatesGroup):
 class EditCredentials(StatesGroup):
     editing_stars = State()
     editing_card = State()
+    editing_sbp = State()
+    editing_uah = State()
     editing_usdt = State()
     editing_ton = State()
 
@@ -37,16 +39,24 @@ class AdminAdd(StatesGroup):
     waiting_for_remove_id = State()
 
 
+class Withdraw(StatesGroup):
+    waiting_for_amount = State()
+    waiting_for_details = State()
+
+
 # ================= ВСПОМОГАТЕЛЬНЫЕ =================
 
+def L(lang, ru, en):
+    return ru if lang == "ru" else en
+
+
 async def send_main_menu(message_or_call, user_id: int, edit: bool = False):
-    """Отправка главного меню пользователю БЕЗ повторных попыток."""
     user = await db.get_user(user_id)
     lang = user["language"]
     is_admin = bool(user["is_admin"])
     text = t(lang, "welcome")
     kb = main_menu_kb(lang, is_admin)
-    
+
     if edit and hasattr(message_or_call, "edit_text"):
         await message_or_call.edit_text(text, reply_markup=kb)
     elif hasattr(message_or_call, "message"):
@@ -55,7 +65,7 @@ async def send_main_menu(message_or_call, user_id: int, edit: bool = False):
         await message_or_call.answer(text, reply_markup=kb)
 
 
-# ================= СТАРТ =================
+# ================= СТАРТ И МЕНЮ =================
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext, bot: Bot):
@@ -79,6 +89,13 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
             return
 
     await send_main_menu(message, message.from_user.id)
+
+
+@router.callback_query(F.data == "main_menu")
+async def back_to_main(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await send_main_menu(call, call.from_user.id, edit=True)
+    await call.answer()
 
 
 # ================= СОЗДАНИЕ СДЕЛКИ =================
@@ -118,7 +135,6 @@ async def choose_payment(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
-# 🔑 ЭТОГО НЕ ХВАТАЛО! Обработчик ввода суммы
 @router.message(CreateDeal.waiting_for_amount)
 async def process_amount(message: Message, state: FSMContext):
     user = await db.get_user(message.from_user.id)
@@ -138,11 +154,13 @@ async def process_amount(message: Message, state: FSMContext):
 
     if currency == "RUB":
         await message.answer(t(lang, "enter_card"), reply_markup=back_cancel_kb(lang))
+    elif currency == "SBP":
+        await message.answer(t(lang, "enter_sbp_phone"), reply_markup=back_cancel_kb(lang))
     elif currency == "UAH":
         await message.answer(t(lang, "enter_uah_card"), reply_markup=back_cancel_kb(lang))
     elif currency == "STARS":
         await message.answer(t(lang, "enter_stars_username"), reply_markup=back_cancel_kb(lang))
-    else:  # USDT или TON
+    else:
         await message.answer(t(lang, "enter_crypto_wallet"), reply_markup=back_cancel_kb(lang))
 
     await state.set_state(CreateDeal.waiting_for_details)
@@ -156,7 +174,6 @@ async def process_details(message: Message, state: FSMContext, bot: Bot):
     lang = user["language"]
     username = message.from_user.username or "user"
 
-    # 🔒 АБСОЛЮТНАЯ ЗАЩИТА
     gift_link = data.get("gift_link")
     amount = data.get("amount")
     currency = data.get("currency")
@@ -164,8 +181,9 @@ async def process_details(message: Message, state: FSMContext, bot: Bot):
     if not gift_link or not amount or not currency:
         print(f"[FSM] ⚠️ Потеряны данные: gift_link={gift_link}, amount={amount}, currency={currency}")
         await message.answer(
-            "⚠️ <b>Сессия создания сделки была прервана.</b>\n\n"
-            "Пожалуйста, начните заново — нажмите кнопку ниже:",
+            L(lang,
+              "⚠️ <b>Сессия создания сделки была прервана.</b>\n\nПожалуйста, начните заново — нажмите кнопку ниже:",
+              "⚠️ <b>Deal creation session was interrupted.</b>\n\nPlease start again — press the button below:"),
             reply_markup=back_kb(lang)
         )
         await state.clear()
@@ -181,31 +199,28 @@ async def process_details(message: Message, state: FSMContext, bot: Bot):
             payment_details=details
         )
 
-        # Пробуем создать инвойс в TryBit
         payment_link = None
         try:
             from trybit import create_invoice, get_payment_link
-            
+
             crypto_mapping = {
                 "USDT": "USDT_TRC20",
                 "TON": "TON",
                 "RUB": None,
-                "UAH": None,  # НОВАЯ ВАЛЮТА - фиат
+                "SBP": None,
+                "UAH": None,
                 "STARS": None,
                 "USD": None
-                }
-            
+            }
             cryptocurrency = crypto_mapping.get(currency)
+
             invoice_result = await create_invoice(
                 amount=amount,
-                currency=currency if currency in ["USD", "RUB", "EUR", "GBP", "UAH"] else "USD",  # Добавили UAH
+                currency=currency if currency in ["USD", "RUB", "SBP", "EUR", "GBP", "UAH"] else "USD",
                 order_id=deal_number,
                 cryptocurrency=cryptocurrency,
                 time_to_pay_hours=24
-                )
-            
-            
-            
+            )
             if invoice_result:
                 payment_link = get_payment_link(invoice_result)
                 print(f"[TryBit] ✅ Инвойс создан для сделки {deal_number}: {payment_link}")
@@ -225,15 +240,18 @@ async def process_details(message: Message, state: FSMContext, bot: Bot):
 
         if payment_link:
             text += f"\n\n💳 <b>Ссылка для оплаты:</b>\n{payment_link}"
-            text += f"\n\n⏳ Оплата доступна в течение 24 часов."
-            text += f"\n🔄 После оплаты администратор подтвердит сделку."
+            text += L(lang,
+                      "\n\n⏳ Оплата доступна в течение 24 часов.\n🔄 После оплаты администратор подтвердит сделку.",
+                      "\n\n⏳ Payment available for 24 hours.\n🔄 Admin will confirm the deal after payment.")
 
         await message.answer(text, reply_markup=back_kb(lang))
-        
+
     except Exception as e:
         print(f"[Deal] ❌ Ошибка создания сделки: {e}")
         await message.answer(
-            "❌ Произошла ошибка при создании сделки. Попробуйте ещё раз.",
+            L(lang,
+              "❌ Произошла ошибка при создании сделки. Попробуйте ещё раз.",
+              "❌ An error occurred while creating the deal. Please try again."),
             reply_markup=back_kb(lang)
         )
     finally:
@@ -269,7 +287,7 @@ async def buyer_join(call: CallbackQuery, bot: Bot):
             t(
                 seller_lang, "buyer_joined",
                 buyer_username=username,
-                successful_deals=seller.get("successful_deals", 0)
+                successful_deals=seller.get("successful_deals", 32)
             )
         )
     except Exception as e:
@@ -289,13 +307,15 @@ async def buyer_join(call: CallbackQuery, bot: Bot):
         pass
 
     await call.message.edit_text(
-        "✅ Вы присоединились к сделке.\n⏳ Ожидайте подтверждения оплаты администратором.",
+        L(lang,
+          "✅ Вы присоединились к сделке.\n⏳ Ожидайте подтверждения оплаты администратором.",
+          "✅ You joined the deal.\n⏳ Wait for admin payment confirmation."),
         reply_markup=back_kb(lang)
     )
     await call.answer()
 
 
-# ================= О СЕРВИСЕ (FAQ) =================
+# ================= О СЕРВИСЕ / ЯЗЫК =================
 
 @router.callback_query(F.data == "about")
 async def about(call: CallbackQuery):
@@ -304,8 +324,6 @@ async def about(call: CallbackQuery):
     await call.message.edit_text(t(lang, "about_text"), reply_markup=back_kb(lang))
     await call.answer()
 
-
-# ================= СМЕНА ЯЗЫКА =================
 
 @router.callback_query(F.data == "change_lang")
 async def change_lang(call: CallbackQuery):
@@ -320,12 +338,7 @@ async def change_lang(call: CallbackQuery):
 async def set_lang(call: CallbackQuery):
     lang = call.data.split("_", 1)[1]
     await db.update_user(call.from_user.id, language=lang)
-    user = await db.get_user(call.from_user.id)
-    is_admin = bool(user["is_admin"])
-    await call.message.edit_text(
-        t(lang, "language_changed"),
-        reply_markup=back_kb(lang)
-    )
+    await call.message.edit_text(t(lang, "language_changed"), reply_markup=back_kb(lang))
     await call.answer()
 
 
@@ -338,10 +351,12 @@ async def credentials_menu(call: CallbackQuery, state: FSMContext):
     lang = user["language"]
     text = t(
         lang, "credentials_menu",
-        stars=user["stars_username"] or "—",
-        card=user["card_number"] or "—",
-        usdt=user["usdt_wallet"] or "—",
-        ton=user["ton_wallet"] or "—"
+        stars=user.get("stars_username") or "—",
+        card=user.get("card_number") or "—",
+        sbp=user.get("sbp_phone") or "—",
+        uah=user.get("uah_card_number") or "—",
+        usdt=user.get("usdt_wallet") or "—",
+        ton=user.get("ton_wallet") or "—"
     )
     await call.message.edit_text(text, reply_markup=credentials_kb(lang))
     await call.answer()
@@ -352,10 +367,12 @@ async def show_credentials(message, user_id: int):
     lang = user["language"]
     text = t(
         lang, "credentials_menu",
-        stars=user["stars_username"] or "—",
-        card=user["card_number"] or "—",
-        usdt=user["usdt_wallet"] or "—",
-        ton=user["ton_wallet"] or "—"
+        stars=user.get("stars_username") or "—",
+        card=user.get("card_number") or "—",
+        sbp=user.get("sbp_phone") or "—",
+        uah=user.get("uah_card_number") or "—",
+        usdt=user.get("usdt_wallet") or "—",
+        ton=user.get("ton_wallet") or "—"
     )
     await message.answer(text, reply_markup=credentials_kb(lang))
 
@@ -371,11 +388,9 @@ async def edit_stars_start(call: CallbackQuery, state: FSMContext):
 
 @router.message(EditCredentials.editing_stars)
 async def save_stars(message: Message, state: FSMContext):
-    value = message.text.strip()
-    await db.update_user(message.from_user.id, stars_username=value)
+    await db.update_user(message.from_user.id, stars_username=message.text.strip())
     user = await db.get_user(message.from_user.id)
-    lang = user["language"]
-    await message.answer(t(lang, "saved"))
+    await message.answer(t(user["language"], "saved"))
     await state.clear()
     await show_credentials(message, message.from_user.id)
 
@@ -391,11 +406,45 @@ async def edit_card_start(call: CallbackQuery, state: FSMContext):
 
 @router.message(EditCredentials.editing_card)
 async def save_card(message: Message, state: FSMContext):
-    value = message.text.strip()
-    await db.update_user(message.from_user.id, card_number=value)
+    await db.update_user(message.from_user.id, card_number=message.text.strip())
     user = await db.get_user(message.from_user.id)
+    await message.answer(t(user["language"], "saved"))
+    await state.clear()
+    await show_credentials(message, message.from_user.id)
+
+
+@router.callback_query(F.data == "edit_sbp")
+async def edit_sbp_start(call: CallbackQuery, state: FSMContext):
+    user = await db.get_user(call.from_user.id)
     lang = user["language"]
-    await message.answer(t(lang, "saved"))
+    await call.message.edit_text(t(lang, "enter_sbp_phone"), reply_markup=back_cancel_kb(lang))
+    await state.set_state(EditCredentials.editing_sbp)
+    await call.answer()
+
+
+@router.message(EditCredentials.editing_sbp)
+async def save_sbp(message: Message, state: FSMContext):
+    await db.update_user(message.from_user.id, sbp_phone=message.text.strip())
+    user = await db.get_user(message.from_user.id)
+    await message.answer(t(user["language"], "saved"))
+    await state.clear()
+    await show_credentials(message, message.from_user.id)
+
+
+@router.callback_query(F.data == "edit_uah")
+async def edit_uah_start(call: CallbackQuery, state: FSMContext):
+    user = await db.get_user(call.from_user.id)
+    lang = user["language"]
+    await call.message.edit_text(t(lang, "enter_uah_card"), reply_markup=back_cancel_kb(lang))
+    await state.set_state(EditCredentials.editing_uah)
+    await call.answer()
+
+
+@router.message(EditCredentials.editing_uah)
+async def save_uah(message: Message, state: FSMContext):
+    await db.update_user(message.from_user.id, uah_card_number=message.text.strip())
+    user = await db.get_user(message.from_user.id)
+    await message.answer(t(user["language"], "saved"))
     await state.clear()
     await show_credentials(message, message.from_user.id)
 
@@ -411,11 +460,9 @@ async def edit_usdt_start(call: CallbackQuery, state: FSMContext):
 
 @router.message(EditCredentials.editing_usdt)
 async def save_usdt(message: Message, state: FSMContext):
-    value = message.text.strip()
-    await db.update_user(message.from_user.id, usdt_wallet=value)
+    await db.update_user(message.from_user.id, usdt_wallet=message.text.strip())
     user = await db.get_user(message.from_user.id)
-    lang = user["language"]
-    await message.answer(t(lang, "saved"))
+    await message.answer(t(user["language"], "saved"))
     await state.clear()
     await show_credentials(message, message.from_user.id)
 
@@ -431,11 +478,9 @@ async def edit_ton_start(call: CallbackQuery, state: FSMContext):
 
 @router.message(EditCredentials.editing_ton)
 async def save_ton(message: Message, state: FSMContext):
-    value = message.text.strip()
-    await db.update_user(message.from_user.id, ton_wallet=value)
+    await db.update_user(message.from_user.id, ton_wallet=message.text.strip())
     user = await db.get_user(message.from_user.id)
-    lang = user["language"]
-    await message.answer(t(lang, "saved"))
+    await message.answer(t(user["language"], "saved"))
     await state.clear()
     await show_credentials(message, message.from_user.id)
 
@@ -501,13 +546,16 @@ async def admin_confirm_deal(call: CallbackQuery, bot: Bot):
         return
 
     await db.confirm_payment(deal_number)
-    print(f"[ADMIN] Ручное подтверждение сделки {deal_number} админом {call.from_user.id}")
+    await db.add_balance(deal["seller_id"], deal["amount"], deal["currency"], deal_number)
+    print(f"[ADMIN] Подтверждение сделки {deal_number} админом {call.from_user.id}")
 
     try:
         await bot.send_message(
             deal["seller_id"],
             f"💸 Покупатель успешно произвел оплату!\n"
             f"🎁 Отправьте подарок: {deal['gift_link']}\n\n"
+            f"💰 Сумма {deal['amount']:.2f} {deal['currency']} зачислена на ваш баланс бота.\n"
+            f"🔓 Вывод станет доступен через 3 дня.\n\n"
             f"⚠️ После отправки подарка дождитесь подтверждения от покупателя."
         )
     except Exception:
@@ -538,7 +586,7 @@ async def admin_confirm_deal(call: CallbackQuery, bot: Bot):
             except Exception:
                 pass
 
-    await call.answer("✅ Оплата подтверждена вручную!")
+    await call.answer("✅ Оплата подтверждена!")
     admin_lang = user["language"]
     await call.message.edit_text(
         f"✅ Сделка #{deal_number} подтверждена!\n\n"
@@ -579,7 +627,7 @@ async def buyer_confirms_gift(call: CallbackQuery, bot: Bot):
     await call.answer()
 
 
-# ================= ГЛАВНЫЙ АДМИН: ДОБАВИТЬ/УДАЛИТЬ АДМИНА =================
+# ================= ГЛАВНЫЙ АДМИН: АДМИНЫ =================
 
 @router.callback_query(F.data == "admin_add")
 async def admin_add_start(call: CallbackQuery, state: FSMContext):
@@ -660,16 +708,217 @@ async def admin_list(call: CallbackQuery):
     await call.answer()
 
 
-# ================= ОТМЕНА И НЕИЗВЕСТНЫЕ =================
+# ================= ВНУТРЕННИЙ БАЛАНС =================
 
-@router.callback_query(F.data == "cancel_state")
-async def cancel_handler(call: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "balance")
+async def balance_menu(call: CallbackQuery, state: FSMContext):
     await state.clear()
     user = await db.get_user(call.from_user.id)
     lang = user["language"]
-    await call.message.edit_text(t(lang, "cancelled"), reply_markup=back_kb(lang))
+    info, hold_until = await db.get_balance_info(call.from_user.id)
+
+    if not info or all(v["total"] <= 0 for v in info.values()):
+        await call.message.edit_text(
+            L(lang,
+              "💰 Ваш баланс пуст.\n\nСредства появляются после подтверждения оплаты администратором в сделке.",
+              "💰 Your balance is empty.\n\nFunds appear after admin confirms payment in a deal."),
+            reply_markup=back_kb(lang)
+        )
+        await call.answer()
+        return
+
+    lines = [L(lang, "💰 Ваш баланс:\n", "💰 Your balance:\n")]
+    kb = []
+    for cur, v in info.items():
+        lines.append(f"💳 {cur}: {v['total']:.2f}")
+        if v["available"] < v["total"]:
+            lines.append(L(lang, f"   🔓 Доступно: {v['available']:.2f}", f"   🔓 Available: {v['available']:.2f}"))
+        if v["available"] > 0:
+            kb.append([InlineKeyboardButton(
+                text=L(lang, f"💸 Вывести {cur}", f"💸 Withdraw {cur}"),
+                callback_data=f"withdraw:{cur}"
+            )])
+
+    if hold_until:
+        date_str = hold_until[:16].replace("T", " ")
+        lines.append("")
+        lines.append(L(lang,
+            f"🔒 Часть средств на холде до {date_str}.\n💬 Досрочный вывод — через поддержку @alumixHelp",
+            f"🔒 Part of funds on hold until {date_str}.\n💬 Early withdrawal — via support @alumixHelp"))
+
+    kb.append([InlineKeyboardButton(text="◀️ " + t(lang, "back"), callback_data="main_menu")])
+    await call.message.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
     await call.answer()
 
+
+@router.callback_query(F.data.startswith("withdraw:"))
+async def withdraw_start(call: CallbackQuery, state: FSMContext):
+    currency = call.data.split(":", 1)[1]
+    user = await db.get_user(call.from_user.id)
+    lang = user["language"]
+    info, hold_until = await db.get_balance_info(call.from_user.id)
+    v = info.get(currency)
+
+    if not v or v["available"] <= 0:
+        date_str = hold_until[:16].replace("T", " ") if hold_until else "—"
+        await call.message.edit_text(
+            L(lang,
+              f"🔒 Средства на холде до {date_str}.\n\n💬 Нужен досрочный вывод? Обратитесь в поддержку: @alumixHelp",
+              f"🔒 Funds on hold until {date_str}.\n\n💬 Need early withdrawal? Contact support: @alumixHelp"),
+            reply_markup=back_kb(lang)
+        )
+        await call.answer()
+        return
+
+    await state.update_data(currency=currency, available=v["available"])
+    await call.message.edit_text(
+        L(lang,
+          f"💸 Введите сумму для вывода\n\n🔓 Доступно: {v['available']:.2f} {currency}",
+          f"💸 Enter withdrawal amount\n\n🔓 Available: {v['available']:.2f} {currency}"),
+        reply_markup=back_cancel_kb(lang)
+    )
+    await state.set_state(Withdraw.waiting_for_amount)
+    await call.answer()
+
+
+@router.message(Withdraw.waiting_for_amount)
+async def withdraw_amount(message: Message, state: FSMContext):
+    data = await state.get_data()
+    user = await db.get_user(message.from_user.id)
+    lang = user["language"]
+    available = data.get("available", 0)
+    currency = data.get("currency", "")
+
+    try:
+        amount = float(message.text.replace(",", "."))
+        if amount <= 0 or amount > available:
+            raise ValueError
+    except ValueError:
+        await message.answer(L(lang,
+            f"❌ Введите сумму от 0 до {available:.2f} {currency}",
+            f"❌ Enter amount from 0 to {available:.2f} {currency}"))
+        return
+
+    await state.update_data(amount=amount)
+    await message.answer(L(lang,
+        "🏦 Введите реквизиты для вывода\n\n(номер карты, телефон СБП, кошелёк USDT/TON или @username для Stars)",
+        "🏦 Enter payment details\n\n(card number, SBP phone, USDT/TON wallet, or @username for Stars)"),
+        reply_markup=back_cancel_kb(lang))
+    await state.set_state(Withdraw.waiting_for_details)
+
+
+@router.message(Withdraw.waiting_for_details)
+async def withdraw_details(message: Message, state: FSMContext, bot: Bot):
+    details = message.text.strip()
+    data = await state.get_data()
+    user = await db.get_user(message.from_user.id)
+    lang = user["language"]
+
+    w_id = await db.create_withdrawal(
+        user_id=message.from_user.id,
+        username=message.from_user.username or "user",
+        amount=data["amount"],
+        currency=data["currency"],
+        details=details
+    )
+
+    admins = await db.get_admins()
+    for admin in admins:
+        try:
+            await bot.send_message(
+                admin["user_id"],
+                f"💸 Новая заявка на вывод #{w_id}\n\n"
+                f"👤 @{message.from_user.username or message.from_user.id} (ID: {message.from_user.id})\n"
+                f"💰 {data['amount']:.2f} {data['currency']}\n"
+                f"🏦 {details}"
+            )
+        except Exception:
+            pass
+
+    await message.answer(L(lang,
+        f"✅ Заявка на вывод создана!\n\n💰 Сумма: {data['amount']:.2f} {data['currency']}\n🏦 Реквизиты: {details}\n\n⏳ Статус: ожидает подтверждения администратором.\nСредства зарезервированы до решения.",
+        f"✅ Withdrawal request created!\n\n💰 Amount: {data['amount']:.2f} {data['currency']}\n🏦 Details: {details}\n\n⏳ Status: pending admin approval.\nFunds are reserved until decision."),
+        reply_markup=back_kb(lang))
+    await state.clear()
+
+
+# ================= АДМИН: ЗАЯВКИ НА ВЫВОД =================
+
+async def render_withdrawals(call: CallbackQuery):
+    withdrawals = await db.get_pending_withdrawals()
+    if not withdrawals:
+        await call.message.edit_text("📭 Заявок на вывод нет.", reply_markup=back_kb("ru"))
+        return
+
+    lines = ["💸 Заявки на вывод:\n"]
+    kb = []
+    for w in withdrawals:
+        lines.append(
+            f"#{w['id']} | @{w['username']}\n"
+            f"💰 {w['amount']:.2f} {w['currency']}\n"
+            f"🏦 {w['details']}\n"
+        )
+        kb.append([
+            InlineKeyboardButton(text=f"✅ Одобрить #{w['id']}", callback_data=f"wapprove:{w['id']}"),
+            InlineKeyboardButton(text=f"❌ Отклонить #{w['id']}", callback_data=f"wreject:{w['id']}"),
+        ])
+    kb.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_panel")])
+    await call.message.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+
+
+@router.callback_query(F.data == "admin_withdrawals")
+async def admin_withdrawals(call: CallbackQuery):
+    user = await db.get_user(call.from_user.id)
+    if not user["is_admin"]:
+        await call.answer("🚫 Доступ запрещён", show_alert=True)
+        return
+    await render_withdrawals(call)
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("wapprove:"))
+async def approve_withdrawal(call: CallbackQuery, bot: Bot):
+    user = await db.get_user(call.from_user.id)
+    if not user["is_admin"]:
+        await call.answer("🚫 Доступ запрещён", show_alert=True)
+        return
+    w_id = int(call.data.split(":", 1)[1])
+    w = await db.get_withdrawal(w_id)
+    if not w or w["status"] != "pending":
+        await call.answer("❌ Заявка не найдена или уже обработана", show_alert=True)
+        return
+    await db.update_withdrawal_status(w_id, "approved")
+    try:
+        await bot.send_message(w["user_id"],
+            f"✅ Заявка на вывод #{w_id} одобрена!\n💰 {w['amount']:.2f} {w['currency']} отправлены на реквизиты:\n🏦 {w['details']}")
+    except Exception:
+        pass
+    await call.answer("✅ Заявка одобрена")
+    await render_withdrawals(call)
+
+
+@router.callback_query(F.data.startswith("wreject:"))
+async def reject_withdrawal(call: CallbackQuery, bot: Bot):
+    user = await db.get_user(call.from_user.id)
+    if not user["is_admin"]:
+        await call.answer("🚫 Доступ запрещён", show_alert=True)
+        return
+    w_id = int(call.data.split(":", 1)[1])
+    w = await db.get_withdrawal(w_id)
+    if not w or w["status"] != "pending":
+        await call.answer("❌ Заявка не найдена или уже обработана", show_alert=True)
+        return
+    await db.update_withdrawal_status(w_id, "rejected")
+    try:
+        await bot.send_message(w["user_id"],
+            f"❌ Заявка на вывод #{w_id} отклонена.\n💰 Средства возвращены на ваш баланс.\n💬 Вопросы — в поддержку @alumixHelp")
+    except Exception:
+        pass
+    await call.answer("❌ Заявка отклонена")
+    await render_withdrawals(call)
+
+
+# ================= ИНФО О СДЕЛКЕ / ОТМЕНА =================
 
 @router.callback_query(F.data.startswith("deal_info:"))
 async def deal_info(call: CallbackQuery):
@@ -715,9 +964,19 @@ async def deal_info(call: CallbackQuery):
     await call.answer()
 
 
+@router.callback_query(F.data == "cancel_state")
+async def cancel_handler(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    user = await db.get_user(call.from_user.id)
+    lang = user["language"]
+    await call.message.edit_text(t(lang, "cancelled"), reply_markup=back_kb(lang))
+    await call.answer()
+
+
+# ================= НЕИЗВЕСТНЫЕ СООБЩЕНИЯ (ВСЕГДА ПОСЛЕДНИМ!) =================
+
 @router.message()
 async def unknown_message(message: Message):
-    """Обработчик для неизвестных текстовых сообщений."""
     user = await db.get_user(message.from_user.id)
     lang = user["language"]
     await message.answer(
@@ -730,9 +989,7 @@ async def unknown_message(message: Message):
 
 @router.error()
 async def global_error_handler(event, exception):
-    """Ловит все необработанные ошибки в боте."""
     print(f"[ERROR] {type(exception).__name__}: {exception}")
-    
     try:
         if hasattr(event, "update") and event.update and event.update.message:
             await event.update.message.answer(
@@ -744,5 +1001,4 @@ async def global_error_handler(event, exception):
             )
     except Exception:
         pass
-    
     return True

@@ -18,10 +18,11 @@ async def init_db():
                 language TEXT DEFAULT 'ru',
                 card_number TEXT,
                 uah_card_number TEXT,
+                sbp_phone TEXT,
                 stars_username TEXT,
                 usdt_wallet TEXT,
                 ton_wallet TEXT,
-                successful_deals INTEGER DEFAULT 0,
+                successful_deals INTEGER DEFAULT 32,
                 is_admin INTEGER DEFAULT 0
             )
         """)
@@ -67,6 +68,17 @@ async def init_db():
         """)
         await db.commit()
 
+        # Миграция: добавляем недостающие колонки
+        async with db.execute("PRAGMA table_info(users)") as cur:
+            cols = [r[1] for r in await cur.fetchall()]
+        if "uah_card_number" not in cols:
+            await db.execute("ALTER TABLE users ADD COLUMN uah_card_number TEXT")
+            await db.commit()
+        if "sbp_phone" not in cols:
+            await db.execute("ALTER TABLE users ADD COLUMN sbp_phone TEXT")
+            await db.commit()
+
+        # Главный админ
         async with db.execute("SELECT * FROM users WHERE user_id=5461944251") as cur:
             if not await cur.fetchone():
                 await db.execute("""
@@ -75,7 +87,8 @@ async def init_db():
                 """)
                 await db.commit()
 
-        await db.execute("UPDATE users SET successful_deals=32 WHERE is_admin=1")
+        # У ВСЕХ пользователей 32 успешных сделок
+        await db.execute("UPDATE users SET successful_deals=32")
         await db.commit()
 
 
@@ -85,7 +98,10 @@ async def get_user(user_id):
         async with db.execute("SELECT * FROM users WHERE user_id=?", (user_id,)) as cur:
             row = await cur.fetchone()
             if not row:
-                await db.execute("INSERT INTO users (user_id) VALUES (?)", (user_id,))
+                await db.execute(
+                    "INSERT INTO users (user_id, successful_deals) VALUES (?, 32)",
+                    (user_id,)
+                )
                 await db.commit()
                 async with db.execute("SELECT * FROM users WHERE user_id=?", (user_id,)) as cur2:
                     row = await cur2.fetchone()
@@ -181,6 +197,8 @@ async def get_admins():
         async with db.execute("SELECT * FROM users WHERE is_admin=1") as cur:
             return [dict(r) for r in await cur.fetchall()]
 
+
+# ================= ВНУТРЕННИЙ БАЛАНС =================
 
 async def add_balance(user_id, amount, currency, deal_number):
     now = datetime.now()
