@@ -75,18 +75,47 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
 
     args = message.text.split(" ", 1) if message.text else []
     if len(args) > 1 and args[1].startswith("ALX"):
-        deal_number = args[1]
+        deal_number = args[1].strip()
         deal = await db.get_deal_by_number(deal_number)
-        if deal and deal["status"] == "waiting_for_buyer":
-            text = t(
-                lang, "buyer_welcome",
-                gift_link=deal["gift_link"],
-                amount=deal["amount"],
-                currency=deal["currency"],
-                seller_username=deal["seller_username"] or "unknown"
+
+        if not deal:
+            await message.answer(
+                L(lang,
+                  f"❌ Сделка {deal_number} не найдена.\n\n"
+                  f"Возможно, она была создана до перезапуска бота, или ссылка устарела.\n"
+                  f"💬 Обратитесь в поддержку: @alumixHelp",
+                  f"❌ Deal {deal_number} not found.\n\n"
+                  f"It may have been created before bot restart, or the link is outdated.\n"
+                  f"💬 Contact support: @alumixHelp"),
+                reply_markup=back_kb(lang)
             )
-            await message.answer(text, reply_markup=join_deal_kb(deal_number, lang))
             return
+
+        if deal["status"] != "waiting_for_buyer":
+            status_msg = {
+                "buyer_joined": "покупатель уже присоединился",
+                "paid": "сделка оплачена",
+                "completed": "сделка завершена",
+            }.get(deal["status"], deal["status"])
+            await message.answer(
+                L(lang,
+                  f"⚠️ Сделка {deal_number} больше не доступна: {status_msg}.",
+                  f"⚠️ Deal {deal_number} is no longer available: {status_msg}."),
+                reply_markup=back_kb(lang)
+            )
+            return
+
+        # 🔑 ВАЖНО: передаём deal_number в текст!
+        text = t(
+            lang, "buyer_welcome",
+            deal_number=deal_number,
+            gift_link=deal["gift_link"],
+            amount=deal["amount"],
+            currency=deal["currency"],
+            seller_username=deal["seller_username"] or "unknown"
+        )
+        await message.answer(text, reply_markup=join_deal_kb(deal_number, lang))
+        return
 
     await send_main_menu(message, message.from_user.id)
 
@@ -988,17 +1017,19 @@ async def unknown_message(message: Message):
 # ================= ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ОШИБОК =================
 
 @router.error()
-async def global_error_handler(event, exception):
-    print(f"[ERROR] {type(exception).__name__}: {exception}")
+async def global_error_handler(event: Exception, update: Update = None):
+    """Ловит все необработанные ошибки. event — это исключение, update — апдейт."""
+    print(f"[ERROR] {type(event).__name__}: {event}")
     try:
-        if hasattr(event, "update") and event.update and event.update.message:
-            await event.update.message.answer(
-                "⚠️ Произошла небольшая ошибка. Попробуйте ещё раз или начните заново с /start"
-            )
-        elif hasattr(event, "update") and event.update and event.update.callback_query:
-            await event.update.callback_query.answer(
-                "⚠️ Произошла ошибка, попробуйте ещё раз", show_alert=True
-            )
+        if update is not None:
+            if update.message:
+                await update.message.answer(
+                    "⚠️ Произошла небольшая ошибка. Попробуйте ещё раз или начните заново с /start"
+                )
+            elif update.callback_query:
+                await update.callback_query.answer(
+                    "⚠️ Произошла ошибка, попробуйте ещё раз", show_alert=True
+                )
     except Exception:
         pass
     return True
