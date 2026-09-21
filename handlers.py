@@ -1,5 +1,5 @@
 from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, Update
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -243,9 +243,19 @@ async def process_details(message: Message, state: FSMContext, bot: Bot):
             }
             cryptocurrency = crypto_mapping.get(currency)
 
+                        # Конвертируем валюты бота в валюты TryBit
+            if currency == "SBP":
+                trybit_currency = "RUB"      # СБП = рубли
+            elif currency == "STARS":
+                trybit_currency = "USD"      # Stars = доллары
+            elif currency in ["USD", "RUB", "UAH", "EUR", "GBP"]:
+                trybit_currency = currency
+            else:
+                trybit_currency = "USD"
+
             invoice_result = await create_invoice(
                 amount=amount,
-                currency=currency if currency in ["USD", "RUB", "SBP", "EUR", "GBP", "UAH"] else "USD",
+                currency=trybit_currency,
                 order_id=deal_number,
                 cryptocurrency=cryptocurrency,
                 time_to_pay_hours=24
