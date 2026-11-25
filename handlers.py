@@ -585,7 +585,7 @@ async def admin_confirm_deal(call: CallbackQuery, bot: Bot):
         return
 
     await db.confirm_payment(deal_number)
-    await db.add_balance(deal["seller_id"], deal["amount"], deal["currency"], deal_number)
+    # Зачисление на баланс происходит при ЗАВЕРШЕНИИ сделки (кнопка покупателя), см. buyer_confirms_gift
     print(f"[ADMIN] Подтверждение сделки {deal_number} админом {call.from_user.id}")
 
     try:
@@ -593,8 +593,7 @@ async def admin_confirm_deal(call: CallbackQuery, bot: Bot):
             deal["seller_id"],
             f"💸 Покупатель успешно произвел оплату!\n"
             f"🎁 Отправьте подарок: {deal['gift_link']}\n\n"
-            f"💰 Сумма {deal['amount']:.2f} {deal['currency']} зачислена на ваш баланс бота.\n"
-            f"🔓 Вывод станет доступен через 3 дня.\n\n"
+            f"💰 Сумма {deal['amount']:.2f} {deal['currency']} будет зачислена на ваш баланс и доступна к выводу сразу после того, как покупатель подтвердит получение подарка.\n\n"
             f"⚠️ После отправки подарка дождитесь подтверждения от покупателя."
         )
     except Exception:
@@ -654,10 +653,21 @@ async def buyer_confirms_gift(call: CallbackQuery, bot: Bot):
 
     await db.complete_deal(deal["deal_number"])
 
+    # Средства зачисляются продавцу именно при завершении сделки и сразу доступны к выводу
+    credited = await db.add_balance(
+        deal["seller_id"], deal["amount"], deal["currency"], deal["deal_number"]
+    )
+
     try:
         await bot.send_message(
             deal["seller_id"],
-            "✅ Сделка завершена! Средства переведены."
+            f"✅ Сделка {deal['deal_number']} завершена!\n"
+            + (
+                f"💰 {deal['amount']:.2f} {deal['currency']} зачислено на ваш баланс.\n"
+                f"🔓 Вывод доступен сразу — раздел «Баланс»."
+                if credited else
+                "💰 Средства по этой сделке уже были зачислены ранее."
+            )
         )
     except Exception:
         pass

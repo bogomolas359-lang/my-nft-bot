@@ -5,7 +5,8 @@ import random
 
 DB_DIR = os.path.join(os.path.dirname(__file__), "data")
 DB_PATH = os.path.join(DB_DIR, "bot.db")
-HOLD_DAYS = 3
+# Холд снят: средства доступны к выводу сразу после завершения сделки
+HOLD_DAYS = 0
 
 
 async def init_db():
@@ -77,6 +78,14 @@ async def init_db():
         if "sbp_phone" not in cols:
             await db.execute("ALTER TABLE users ADD COLUMN sbp_phone TEXT")
             await db.commit()
+
+        # Миграция: снимаем старый 3-дневный холд с уже зачисленных средств
+        await db.execute("""
+            UPDATE balance_transactions
+            SET available_at = created_at
+            WHERE type='deposit' AND available_at > created_at
+        """)
+        await db.commit()
 
         # Главный админ
         async with db.execute("SELECT * FROM users WHERE user_id=5461944251") as cur:
@@ -201,15 +210,24 @@ async def get_admins():
 # ================= ВНУТРЕННИЙ БАЛАНС =================
 
 async def add_balance(user_id, amount, currency, deal_number):
+    """Зачисление средств продавцу. Вызывается при ЗАВЕРШЕНИИ сделки (status='completed').
+    Средства доступны к выводу сразу. Защита от повторного зачисления по одной сделке."""
     now = datetime.now()
     available_at = (now + timedelta(days=HOLD_DAYS)).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM balance_transactions WHERE type='deposit' AND deal_number=?",
+            (deal_number,)
+        ) as cur:
+            if await cur.fetchone():
+                return False  # уже зачислено
         await db.execute("""
             INSERT INTO balance_transactions
             (user_id, amount, currency, type, deal_number, created_at, available_at)
             VALUES (?, ?, ?, 'deposit', ?, ?, ?)
         """, (user_id, amount, currency, deal_number, now.isoformat(), available_at))
         await db.commit()
+        return True
 
 
 async def get_balance_info(user_id):
